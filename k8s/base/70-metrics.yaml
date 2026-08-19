@@ -1,0 +1,44 @@
+# Scrape targets.
+#
+# A headless Service (`clusterIP: None`) rather than a load-balanced one: the
+# point is to enumerate *every* pod so Prometheus scrapes each replica
+# individually. A normal Service would round-robin scrapes across replicas and
+# produce one incoherent series stitched from several processes — counters that
+# appear to go backwards, and a histogram that describes nothing.
+apiVersion: v1
+kind: Service
+metadata:
+  name: etl-migrator-metrics
+  namespace: etl-migration
+  labels:
+    app.kubernetes.io/name: etl-migrator
+    app.kubernetes.io/component: metrics
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: etl-migrator
+  ports:
+    - {name: metrics, port: 9464, targetPort: metrics, protocol: TCP}
+---
+# For a cluster running the Prometheus Operator. Applied on its own it is inert
+# — the CRD simply will not exist — so `kubectl apply -k k8s/base` on a cluster
+# without the operator fails loudly here rather than silently doing nothing.
+# That is why it is in its own file: skip it, or install the operator.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: etl-migrator
+  namespace: etl-migration
+  labels:
+    app.kubernetes.io/name: etl-migrator
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: etl-migrator
+      app.kubernetes.io/component: metrics
+  endpoints:
+    - port: metrics
+      interval: 30s
+      # Two counters take a while to move — a migration is minutes — so a
+      # shorter interval buys nothing but storage.
+      scrapeTimeout: 10s

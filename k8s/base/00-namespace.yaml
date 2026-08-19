@@ -1,0 +1,17 @@
+# The namespace is the security boundary everything else hangs off: the
+# NetworkPolicies below are namespace-scoped, and the RBAC Role is too.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: etl-migration
+  labels:
+    app.kubernetes.io/name: etl-migration
+    app.kubernetes.io/part-of: autonomous-etl
+    # Enforce the restricted Pod Security Standard at admission. This is the
+    # backstop for every securityContext in this directory: if a future
+    # manifest forgets `runAsNonRoot` or asks for a capability, the API server
+    # rejects the pod rather than scheduling it and hoping.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

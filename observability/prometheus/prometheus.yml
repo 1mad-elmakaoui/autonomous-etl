@@ -1,0 +1,20 @@
+# Local scrape config for `docker compose --profile observability up -d`.
+#
+# In Kubernetes the Prometheus Operator discovers targets from the
+# ServiceMonitor in k8s/base/70-metrics.yaml; this file is the compose
+# equivalent, where there is no operator and the targets are known by name.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: etl-migrator
+    # `host.docker.internal` is the worker running from your checkout — the
+    # normal development shape, where you edit source and restart it by hand.
+    # The containerised worker is `worker:9464` under the `worker` profile.
+    static_configs:
+      - targets: ["host.docker.internal:9464", "worker:9464"]
+        labels: {deployment: local}
+    # A worker that is not running should not fill the log with noise: a target
+    # being down is itself a series (`up`), which is the honest way to see it.
+    honor_labels: true

@@ -1,0 +1,84 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "autonomous-etl-migration-agent"
+version = "0.1.0"
+description = "Autonomously migrates legacy ETL pipelines to validated, optimized PySpark using AutoGen agents orchestrated by Temporal."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+license = { text = "MIT" }
+
+dependencies = [
+    "pydantic>=2.13,<3",
+    "pydantic-settings>=2.15,<3",
+    "structlog>=26.1,<27",
+    "autogen-core>=0.7.5,<0.8",
+    "autogen-agentchat>=0.7.5,<0.8",
+    "autogen-ext[openai,anthropic]>=0.7.5,<0.8",
+    "temporalio>=1.31,<2",
+    "typer>=0.20,<1",
+    "pandas>=2.2,<3",
+    # Used directly by the GitHub transport. Already present transitively via
+    # autogen-ext, but a package that imports it must depend on it explicitly.
+    "httpx>=0.28,<1",
+    # The metrics layer. Small, dependency-free, and the reference client for
+    # the exposition format.
+    "prometheus-client>=0.22,<1",
+]
+
+[project.optional-dependencies]
+spark = ["pyspark>=4.0,<5"]
+dev = [
+    # 9.0.3 is the floor, not a preference: 8.4.2 carries PYSEC-2026-1845 and
+    # the old `<9` pin excluded the fix. `make audit` is what found that.
+    "pytest>=9.0.3,<10",
+    "pytest-asyncio>=1.0,<2",
+    "ruff>=0.14,<1",
+    "mypy>=1.14,<2",
+    "pandas-stubs",
+    "pip-audit>=2.10,<3",
+    "pyyaml>=6.0,<7",
+]
+
+[project.scripts]
+etl-migrator = "etl_migrator.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/etl_migrator"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "C4", "RUF"]
+ignore = ["B008"]
+
+[tool.ruff.lint.per-file-ignores]
+# The example legacy pipeline is deliberately written in idiomatic-but-dated style.
+"examples/**" = ["E", "F", "B", "SIM", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+packages = ["etl_migrator"]
+mypy_path = "src"
+strict = true
+warn_unused_ignores = true
+disallow_untyped_decorators = false
+
+[[tool.mypy.overrides]]
+module = ["autogen_agentchat.*", "autogen_core.*", "autogen_ext.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-q --strict-markers"
+python_functions = "test_*"
+markers = [
+    "spark: requires a local PySpark installation and a JVM",
+    "integration: requires external services (Temporal, Postgres, MinIO)",
+]

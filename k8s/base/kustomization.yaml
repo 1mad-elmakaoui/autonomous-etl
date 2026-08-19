@@ -1,0 +1,44 @@
+# The base overlay. `kubectl apply -k k8s/base` applies everything in order.
+#
+# Deliberately absent: Temporal, PostgreSQL and MinIO. Those have maintained
+# upstream Helm charts, and reimplementing them as raw YAML here would be a
+# worse copy that silently drifts from the original. `k8s/README.md` has the
+# install commands. What this directory owns is the part nobody else can write:
+# the two workers and the policies that separate them.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: etl-migration
+
+resources:
+  - 00-namespace.yaml
+  - 10-rbac.yaml
+  - 20-networkpolicy.yaml
+  - 30-config.yaml
+  - 40-agent-worker.yaml
+  - 50-execution-worker.yaml
+  - 60-availability.yaml
+  # Carries a ServiceMonitor, which needs the Prometheus Operator's CRD. On a
+  # cluster without it, drop this line — see k8s/README.md.
+  - 70-metrics.yaml
+
+# `commonLabels` was deprecated in kustomize v5. This is its exact
+# equivalent: `includeSelectors: true` is what commonLabels did implicitly,
+# and dropping it would quietly narrow every Deployment's selector.
+labels:
+  - includeSelectors: true
+    pairs:
+      app.kubernetes.io/part-of: autonomous-etl
+
+# Deliberately no `images:` transformer.
+#
+# It matches on image *name*, and both deployments name the same repository —
+# they differ only by tag (`-cli` has no JVM, `-worker` has the JRE and
+# PySpark). So a single entry with `newTag:` rewrote both, silently giving the
+# execution worker the image with no Java in it. The manifests looked correct;
+# only the rendered output showed it.
+#
+# To pin a digest for a real deployment, do it in an overlay that patches each
+# Deployment by name, or split the two into separate repositories so a name can
+# identify one of them. `kustomize edit set image` cannot express "these two,
+# differently" while they share a name.

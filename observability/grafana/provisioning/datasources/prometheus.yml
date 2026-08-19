@@ -1,0 +1,10 @@
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    # The dashboard is exported with a `${DS_PROMETHEUS}` input, so the uid here
+    # is what makes it resolve without anyone picking a datasource by hand.
+    uid: DS_PROMETHEUS
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true

@@ -1,0 +1,143 @@
+# The network isolation the subprocess sandbox cannot provide on its own.
+#
+# `sandbox/runner.py` states plainly what it does and does not guarantee:
+# process isolation, a scrubbed environment, resource limits and a wall-clock
+# kill — but *not* network egress, because blocking that needs a network
+# namespace and privileges the worker does not have. This is where that gets
+# closed, at the layer that actually owns it.
+#
+# The design is default-deny plus named exceptions. A policy that allowed
+# everything except a blocklist would be the same mistake the static gate
+# avoids: an allowlist is auditable, a blocklist is unbounded.
+#
+# Note what this is *not*. It constrains the pod, so it constrains the
+# subprocess the pod spawns — which is precisely why the two worker roles are
+# deployed separately. Co-located, the pod would need egress to the model
+# provider, and the untrusted subprocess would inherit exactly that. The split
+# is what lets the executing worker have no internet at all.
+
+# --- everything is denied unless a later policy allows it ------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: etl-migration
+spec:
+  # An empty selector means every pod in the namespace.
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  # No ingress or egress rules at all: nothing in, nothing out.
+---
+# --- DNS, for everyone -----------------------------------------------------
+# Without this, a default-deny egress policy breaks name resolution and every
+# connection fails with something that looks nothing like a firewall problem.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: etl-migration
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+---
+# --- the execution worker: Temporal, and nothing else ----------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: execution-worker-egress
+  namespace: etl-migration
+  annotations:
+    etl-migration/rationale: >-
+      This pod runs untrusted generated code. Its only legitimate destination is
+      the Temporal frontend it polls for work. There is deliberately no rule for
+      443: generated code that tries to exfiltrate anything has nowhere to send
+      it, and a dependency it tries to download will not resolve.
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: execution-worker
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: temporal
+      ports:
+        - {protocol: TCP, port: 7233}
+---
+# --- the agent worker: Temporal, plus the internet it genuinely needs ------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agent-worker-egress
+  namespace: etl-migration
+  annotations:
+    etl-migration/rationale: >-
+      This pod calls a model provider and the GitHub API, so it needs 443. It
+      never executes generated code — that is the whole reason the roles are
+      split — so the broader egress is not exposed to anything untrusted.
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: agent-worker
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: temporal
+      ports:
+        - {protocol: TCP, port: 7233}
+    # HTTPS to anywhere outside the cluster. Narrowing this to the provider's
+    # addresses is not possible with a NetworkPolicy, which selects on pods and
+    # CIDRs rather than names; the RFC1918 exclusions below are the part that
+    # matters, because they stop this rule from becoming a route into the rest
+    # of the cluster and into cloud metadata.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16   # link-local, and 169.254.169.254 in particular
+      ports:
+        - {protocol: TCP, port: 443}
+---
+# --- let Prometheus scrape, and nothing else in ---------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-metrics-scrape
+  namespace: etl-migration
+  annotations:
+    etl-migration/rationale: >-
+      The default-deny policy above blocks ingress as well as egress, so adding
+      a /metrics endpoint without this would produce a permanently unscrapeable
+      pod and a dashboard of no data. This is the only ingress rule in the
+      namespace: one port, from the monitoring namespace only. Note the
+      direction — Prometheus reaching in is not the executing worker reaching
+      out, so this does not widen what untrusted code can do.
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: etl-migrator
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - {protocol: TCP, port: 9464}

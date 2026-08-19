@@ -1,0 +1,29 @@
+# Keep a worker of each role alive through a node drain.
+#
+# Without this a cluster upgrade can evict every replica of a role at once, and
+# a migration mid-flight stalls until something reschedules. Temporal would
+# recover it — that is the point of durable execution — but "recovers eventually"
+# and "never stopped" are different service levels, and this one is nearly free.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: etl-agent-worker
+  namespace: etl-migration
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: etl-migrator
+      app.kubernetes.io/component: agent-worker
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: etl-execution-worker
+  namespace: etl-migration
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: etl-migrator
+      app.kubernetes.io/component: execution-worker

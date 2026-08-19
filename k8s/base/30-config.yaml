@@ -1,0 +1,45 @@
+# Non-secret configuration. Everything here is safe to read.
+#
+# Note the task queues: two of them, which is what routes the untrusted-code
+# activities to the worker that has no internet. Setting
+# ETLM_TEMPORAL_EXECUTION_TASK_QUEUE to an empty string collapses the split back
+# to a single queue — correct on a laptop, wrong here, so it is set.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: etl-migration-config
+  namespace: etl-migration
+data:
+  ETLM_TEMPORAL_HOST: "temporal-frontend:7233"
+  ETLM_TEMPORAL_NAMESPACE: "default"
+  ETLM_TEMPORAL_TASK_QUEUE: "etl-migration"
+  ETLM_TEMPORAL_EXECUTION_TASK_QUEUE: "etl-execution"
+  ETLM_WORKSPACE_DIR: "/var/lib/etl-migrator/workspace"
+  ETLM_LOG_FORMAT: "json"
+  ETLM_LOG_LEVEL: "INFO"
+  # Overridden per-deployment: only the agent worker has a provider to talk to.
+  ETLM_LLM_PROVIDER: "scripted"
+---
+# A *template*, committed with no values in it.
+#
+# `stringData` is absent on purpose: filling it in here would put credentials in
+# git, which is the one mistake this whole arrangement exists to prevent. Create
+# the real Secret out of band —
+#
+#   kubectl -n etl-migration create secret generic etl-migration-secrets \
+#     --from-literal=ETLM_LLM_API_KEY=... \
+#     --from-literal=ETLM_GITHUB_TOKEN=...
+#
+# — or, better in production, have an External Secrets Operator or the CSI
+# driver project it from a real secret store. The deployments below reference
+# the keys optionally, so a cluster without this Secret still starts: the worker
+# reports that GitHub is not configured rather than crash-looping.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: etl-migration-secrets
+  namespace: etl-migration
+  annotations:
+    etl-migration/rationale: >-
+      Committed empty. Populate out of band; never add stringData to this file.
+type: Opaque

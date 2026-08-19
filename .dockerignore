@@ -1,0 +1,43 @@
+# Everything the image does not need. Two reasons this file matters more than
+# image size: a smaller context makes the build cache far less likely to miss,
+# and `.env` sitting in the build context is one `COPY . .` away from a secret
+# baked into a published layer.
+
+.git
+.github
+.gitignore
+
+# Secrets and local configuration. Never in a build context.
+.env
+.env.*
+!.env.example
+
+# Local state
+.workspace
+.workspace-*
+.venv
+venv
+*.egg-info
+dist
+build
+
+# Caches
+__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+
+# Not needed at runtime. Tests are run in CI against the source tree, not
+# inside the image — an image that ships its own tests invites someone to
+# trust a suite that ran against different dependencies than production.
+tests
+docs
+*.md
+!README.md
+Makefile
+docker-compose.yml
+Dockerfile
+k8s

@@ -1,0 +1,21 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.env
+.coverage
+htmlcov/
+
+# Migration run artifacts (content-addressed, regenerated on every run)
+.workspace/
+artifacts/
+
+# Spark local noise
+metastore_db/
+derby.log
+spark-warehouse/

@@ -1,0 +1,17 @@
+# A local cluster that can actually exercise the NetworkPolicies.
+#
+# The default CNI shipped with kind (kindnet) does **not** enforce
+# NetworkPolicy. Applying the policies to a stock kind cluster produces a green
+# `kubectl get netpol` and zero enforcement, which is worse than not applying
+# them: it looks tested. So the CNI is disabled here and Calico is installed
+# separately — see k8s/README.md.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: etl-migration
+networking:
+  disableDefaultCNI: true
+  podSubnet: "192.168.0.0/16"
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker

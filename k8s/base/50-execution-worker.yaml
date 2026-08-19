@@ -1,0 +1,91 @@
+# The execution worker: the pod that runs untrusted generated code.
+#
+# Everything about it is narrower than the agent worker, and each difference is
+# a consequence of that one fact:
+#
+#   * no internet egress at all (see 20-networkpolicy.yaml) — so generated code
+#     has nowhere to send what it finds and nothing to download;
+#   * no credentials in its environment — there is no Secret reference here,
+#     and `sandbox/runner.py` scrubs the environment again on the way into the
+#     subprocess, which is belt and braces on purpose;
+#   * no service account token on disk;
+#   * the worker image, because this is the half that needs a JVM.
+#
+# It is also the memory-hungry half: a Spark driver in local mode is what the
+# limit has to accommodate, and it is why the two roles get separate
+# deployments rather than separate replicas of one.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: etl-execution-worker
+  namespace: etl-migration
+  labels: &labels
+    app.kubernetes.io/name: etl-migrator
+    app.kubernetes.io/component: execution-worker
+    app.kubernetes.io/part-of: autonomous-etl
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: etl-migrator
+      app.kubernetes.io/component: execution-worker
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      serviceAccountName: etl-execution-worker
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: worker
+          image: ghcr.io/1mad-elmakaoui/autonomous-etl:latest-worker
+          imagePullPolicy: IfNotPresent
+          args: ["worker", "--role", "execution"]
+          ports:
+            - {name: metrics, containerPort: 9464, protocol: TCP}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          envFrom:
+            - configMapRef: {name: etl-migration-config}
+          env:
+            # Stated rather than inherited. This worker never calls a model, so
+            # pointing it at a provider would be a configuration error; the
+            # scripted client needs no key and no network.
+            - name: ETLM_LLM_PROVIDER
+              value: "scripted"
+          resources:
+            # Spark's driver JVM is the floor here. Under-requesting memory does
+            # not make it cheaper, it makes it OOMKill halfway through a
+            # benchmark and report a failed run.
+            requests: {cpu: "500m", memory: "2Gi"}
+            limits: {cpu: "2", memory: "4Gi"}
+          volumeMounts:
+            - {name: workspace, mountPath: /var/lib/etl-migrator/workspace}
+            - {name: tmp, mountPath: /tmp}
+          startupProbe:
+            exec: {command: ["java", "-version"]}
+            periodSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            # /healthz answers from the metrics server and deliberately does not
+            # check Temporal. A liveness probe that failed during a Temporal
+            # outage would restart every replica at once and turn one outage
+            # into two.
+            httpGet: {path: /healthz, port: metrics}
+            periodSeconds: 30
+            timeoutSeconds: 10
+      volumes:
+        # emptyDir, not a PVC: a migration's workspace is scratch. Both
+        # pipelines are executed and diffed within one activity's lifetime, and
+        # the artifacts that matter are persisted by `persist_artifacts` and
+        # pushed to the PR. Nothing here needs to survive a restart, and giving
+        # untrusted code durable shared storage would be a poor trade.
+        - {name: workspace, emptyDir: {}}
+        - {name: tmp, emptyDir: {}}

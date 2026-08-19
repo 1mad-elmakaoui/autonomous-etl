@@ -1,0 +1,144 @@
+# Build, scan and publish the container images.
+#
+# Split from ci.yml deliberately. CI answers "is this change correct?" and runs
+# on every push with no credentials at all; this answers "should this become an
+# artifact other people pull?" and needs a registry token. Keeping them apart
+# means the workflow that handles a credential has a much smaller surface, and
+# a pull request from a fork can never reach it.
+#
+# Deployment to Kubernetes is deliberately absent rather than
+# stubbed. A workflow step that pretends to deploy is worse than no step: it
+# turns a missing capability into a green tick.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to publish (defaults to the commit sha)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false   # never abandon a half-finished publish
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  publish:
+    name: build, scan, push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write        # the only write this repository's CI ever needs
+      id-token: write        # provenance attestation
+      attestations: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - target: cli
+            suffix: cli
+            spark: "false"
+          - target: worker
+            suffix: worker
+            spark: "true"
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          # The built-in token, scoped by the `packages: write` permission
+          # above. No long-lived registry credential is stored anywhere.
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          flavor: |
+            suffix=-${{ matrix.suffix }},onlatest=true
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=long
+            type=raw,value=${{ inputs.tag }},enable=${{ inputs.tag != '' }}
+
+      # Build once, locally, so the image can be scanned *before* anyone can
+      # pull it. Pushing first and scanning afterwards publishes the
+      # vulnerability and then reports it.
+      - name: Build for scanning
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: ${{ matrix.target }}
+          build-args: INSTALL_SPARK=${{ matrix.spark }}
+          push: false
+          load: true
+          tags: scan-target:${{ matrix.suffix }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Scan before publishing
+        # See ci.yml for why this installs Trivy from its apt repository rather
+        # than using aquasecurity/trivy-action (GHSA-cxm3-wv7p-598c, March 2026).
+        env:
+          TRIVY_VERSION: "0.69.3"
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends wget gnupg
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key \
+            | gpg --dearmor | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" \
+            | sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install -y "trivy=${TRIVY_VERSION}"
+          trivy image --severity HIGH,CRITICAL --ignore-unfixed \
+            --exit-code 1 --format table "scan-target:${{ matrix.suffix }}"
+
+      - name: Verify it is not root before publishing
+        run: |
+          uid="$(docker run --rm --entrypoint id "scan-target:${{ matrix.suffix }}" -u)"
+          [ "$uid" != "0" ] || { echo "::error::image runs as root"; exit 1; }
+
+      - name: Push
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: ${{ matrix.target }}
+          build-args: INSTALL_SPARK=${{ matrix.spark }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+
+      - name: Attest provenance
+        # So a consumer can verify this digest was built by this workflow from
+        # this commit, rather than pushed by someone with a registry token.
+        #
+        # The subject is the *repository*, not `...-cli`: `flavor: suffix` in
+        # metadata-action suffixes the tags, so both variants live at
+        # ghcr.io/<owner>/<repo> and are told apart by tag. Naming a
+        # non-existent `<repo>-cli` package here would attest nothing.
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true

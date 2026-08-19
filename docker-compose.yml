@@ -1,0 +1,149 @@
+# Local development stack for the durable path.
+#
+#   docker compose up -d                    # Temporal + Postgres + UI
+#   etl-migrator worker                     # a worker from your checkout
+#   etl-migrator submit examples/customer_pipeline/legacy_pipeline.py
+#
+#   docker compose --profile worker up -d   # ...or run the worker as a container
+#   docker compose --profile observability up -d   # Prometheus + Grafana
+#
+# Temporal UI: http://localhost:8080
+# Grafana:     http://localhost:3000  (dashboard provisioned, no login)
+#
+# The containerised worker sits behind a profile so the default `up` stays fast
+# and keeps using your working tree — which is what you want while developing an
+# agent. The profile is for checking the *image* behaves: same code, different
+# environment, and the environment is where container-only problems live.
+#
+# The Kubernetes manifests in k8s/ replace this for anything beyond a laptop;
+# there, Prometheus discovers targets from a ServiceMonitor rather than the
+# static list in observability/prometheus/prometheus.yml.
+
+name: etl-migrator
+
+services:
+  postgresql:
+    image: postgres:16-alpine
+    container_name: etlm-postgres
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+      POSTGRES_DB: temporal
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  temporal:
+    image: temporalio/auto-setup:1.29.0
+    container_name: etlm-temporal
+    depends_on:
+      postgresql:
+        condition: service_healthy
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: temporal
+      POSTGRES_SEEDS: postgresql
+    ports:
+      - "7233:7233"
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "temporal:7233"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+
+  temporal-ui:
+    image: temporalio/ui:2.34.0
+    container_name: etlm-temporal-ui
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: http://localhost:8080
+    ports:
+      - "8080:8080"
+
+  worker:
+    profiles: ["worker"]
+    build:
+      context: .
+      target: worker
+      args:
+        INSTALL_SPARK: "true"
+    image: etl-migrator:worker
+    container_name: etlm-worker
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      ETLM_TEMPORAL_HOST: temporal:7233
+      # The scripted provider keeps `compose up` free and offline. Point
+      # ETLM_LLM_PROVIDER at a real one and supply ETLM_LLM_API_KEY through
+      # your shell to run against a live model; nothing here holds a secret.
+      ETLM_LLM_PROVIDER: ${ETLM_LLM_PROVIDER:-scripted}
+      ETLM_LLM_API_KEY: ${ETLM_LLM_API_KEY:-}
+      ETLM_GITHUB_TOKEN: ${ETLM_GITHUB_TOKEN:-}
+      ETLM_GITHUB_REPOSITORY: ${ETLM_GITHUB_REPOSITORY:-}
+      ETLM_LOG_FORMAT: json
+    volumes:
+      # The examples are mounted read-only: the worker reads legacy sources and
+      # input data, and has no business writing to either.
+      - ./examples:/app/examples:ro
+      - workspace:/var/lib/etl-migrator/workspace
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  prometheus:
+    profiles: ["observability"]
+    image: prom/prometheus:v3.7.3
+    container_name: etlm-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-lifecycle
+    volumes:
+      - ./observability/prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    extra_hosts:
+      # So a worker running from your checkout, outside compose, is scrapeable.
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    profiles: ["observability"]
+    image: grafana/grafana:12.3.1
+    container_name: etlm-grafana
+    depends_on: [prometheus]
+    environment:
+      # Anonymous read-only access. This is a laptop stack with no data worth
+      # protecting; requiring a login would only teach people to type admin
+      # twice. Nothing here is exposed beyond localhost.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_USERS_DEFAULT_THEME: light
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+
+volumes:
+  postgres-data:
+  workspace:
+  prometheus-data:

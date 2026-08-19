@@ -1,0 +1,95 @@
+# The agent worker: reasoning, and the GitHub delivery.
+#
+# It holds the credentials and reaches the internet, and it never executes
+# generated code. Those two facts are the same decision seen from two sides.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: etl-agent-worker
+  namespace: etl-migration
+  labels: &labels
+    app.kubernetes.io/name: etl-migrator
+    app.kubernetes.io/component: agent-worker
+    app.kubernetes.io/part-of: autonomous-etl
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: etl-migrator
+      app.kubernetes.io/component: agent-worker
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      serviceAccountName: etl-agent-worker
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: worker
+          # Pinned by tag here for readability; `kustomize edit set image` or a
+          # digest is what a real deployment should carry, since a tag is
+          # mutable and a digest is not.
+          image: ghcr.io/1mad-elmakaoui/autonomous-etl:latest-cli
+          imagePullPolicy: IfNotPresent
+          args: ["worker", "--role", "agent"]
+          ports:
+            - {name: metrics, containerPort: 9464, protocol: TCP}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          envFrom:
+            - configMapRef: {name: etl-migration-config}
+          env:
+            # Every credential is optional. A cluster without the Secret starts
+            # normally and reports GitHub as unconfigured — an unset token is an
+            # ordinary state, not a failure.
+            - name: ETLM_LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: etl-migration-secrets
+                  key: ETLM_LLM_API_KEY
+                  optional: true
+            - name: ETLM_GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: etl-migration-secrets
+                  key: ETLM_GITHUB_TOKEN
+                  optional: true
+            - name: ETLM_GITHUB_REPOSITORY
+              valueFrom:
+                secretKeyRef:
+                  name: etl-migration-secrets
+                  key: ETLM_GITHUB_REPOSITORY
+                  optional: true
+          resources:
+            # Agent work is IO-bound: it waits on a model provider. The request
+            # is what it needs to poll and parse; the limit stops a runaway from
+            # starving the executing pods it shares a node with.
+            requests: {cpu: "100m", memory: "512Mi"}
+            limits: {cpu: "1", memory: "2Gi"}
+          volumeMounts:
+            - {name: workspace, mountPath: /var/lib/etl-migrator/workspace}
+            - {name: tmp, mountPath: /tmp}
+          startupProbe:
+            # Generous: the first poll has to reach Temporal, and a cold cluster
+            # may still be starting it. 30 x 5s before giving up.
+            exec: {command: ["python", "-c", "import etl_migrator"]}
+            periodSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            # /healthz answers from the metrics server and deliberately does not
+            # check Temporal. A liveness probe that failed during a Temporal
+            # outage would restart every replica at once and turn one outage
+            # into two.
+            httpGet: {path: /healthz, port: metrics}
+            periodSeconds: 30
+            timeoutSeconds: 10
+      volumes:
+        - {name: workspace, emptyDir: {}}
+        - {name: tmp, emptyDir: {}}

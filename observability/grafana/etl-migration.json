@@ -1,0 +1,452 @@
+{
+  "title": "Autonomous ETL Migration",
+  "uid": "etl-migration",
+  "tags": [
+    "etl",
+    "autonomous-etl"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 2,
+  "refresh": "1m",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "templating": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Migration outcomes",
+      "description": "Migrations by final state. A failure is a result the system reports, not an absence \u2014 if this is flat at zero, check that anything is running at all.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "DS_PROMETHEUS"
+      },
+      "targets": [
+        {
+          "expr": "sum by (outcome) (increase(etl_migrations_total[$__range]))",
+          "legendFormat": "{{outcome}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "DS_PROMETHEUS"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Validation verdicts",
+      "description": "Computed by the differ from executed output. PASS here is the only definition of correct this system recognises; no agent can move it.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "DS_PROMETHEUS"
+      },
+      "targets": [
+        {
+          "expr": "sum by (status) (increase(etl_validations_total[$__range]))",
+          "legendFormat": "{{status}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "DS_PROMETHEUS"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Migration duration",
+      "description": "p50 and p95 wall-clock. The gap between them is where a stalled Spark run or a slow provider shows up first.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "DS_PROMETHEUS"
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum by (le) (increase(etl_migration_duration_seconds_bucket[$__range])))",
+          "legendFormat": "p50",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "DS_PROMETHEUS"
+          }
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (increase(etl_migration_duration_seconds_bucket[$__range])))",
+          "legendFormat": "p95",
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "DS_PROMETHEUS"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Stage duration (p95)",
+      "description": "Which stage owns the tail. Benchmarking and validation dominate by design \u2014 they execute Spark \u2014 so watch for the others creeping up.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "DS_PROMETHEUS"
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, stage) (increase(etl_stage_duration_seconds_bucket[$__range])))",
+          "legendFormat": "{{stage}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "DS_PROMETHEUS"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Why optimisations were refused",
+      "description": "'Nothing was kept' has several very different causes, which is why they are separate labels. rejected_inconclusive rising means measurements are getting too noisy to read \u2014 the fix is more benchmark runs, never a laxer threshold.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "DS_PROMETHEUS"
+      },
+      "targets": [
+        {
+          "expr": "sum by (verdict) (increase(etl_optimization_attempts_total[$__range]))",
+          "legendFormat": "{{verdict}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "DS_PROMETHEUS"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "sum"
+          ],
+          "showLegend": true
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Kept speedup",
+      "description": "Only accepted optimisations are observed. A rejected proposal's ratio is a number the system declined to believe, and averaging it in would report improvements that were never kept.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "DS_PROMETHEUS"
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum by (le) (increase(etl_optimization_speedup_ratio_bucket[$__range])))",
+          "legendFormat": "median kept",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "DS_PROMETHEUS"
+          }
+        },
+        {
+          "expr": "sum(increase(etl_optimization_speedup_ratio_count[$__range]))",
+          "legendFormat": "accepted/s",
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "DS_PROMETHEUS"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Benchmark noise vs the refusal ceiling",
+      "description": "The measurement's own error bar. 0.25 is where a comparison is refused as unreadable, so this is the early warning that verdicts are about to start coming back inconclusive.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "DS_PROMETHEUS"
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, role) (increase(etl_benchmark_noise_ratio_bucket[$__range])))",
+          "legendFormat": "p95 {{role}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "DS_PROMETHEUS"
+          }
+        },
+        {
+          "expr": "vector(0.25)",
+          "legendFormat": "refusal ceiling",
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "DS_PROMETHEUS"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Repair attempts",
+      "description": "'refused' is the anti-oscillation ledger turning away a repeated strategy before it costs a Spark run. That is the loop's savings, not its failures \u2014 a healthy system shows some.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "DS_PROMETHEUS"
+      },
+      "targets": [
+        {
+          "expr": "sum by (outcome) (increase(etl_repair_attempts_total[$__range]))",
+          "legendFormat": "{{outcome}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "DS_PROMETHEUS"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Failing checks",
+      "description": "Which invariant breaks most often. A check that never fails is either genuinely safe or not really being measured \u2014 worth knowing which.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 32
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "DS_PROMETHEUS"
+      },
+      "targets": [
+        {
+          "expr": "sum by (check) (increase(etl_validation_checks_total{result=\"fail\"}[$__range]))",
+          "legendFormat": "{{check}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "DS_PROMETHEUS"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Delivery dispositions",
+      "description": "'refused' means a migration was not allowed to become a pull request \u2014 almost always because it was never validated. That is the policy working.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 32
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "DS_PROMETHEUS"
+      },
+      "targets": [
+        {
+          "expr": "sum by (disposition) (increase(etl_deliveries_total[$__range]))",
+          "legendFormat": "{{disposition}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "DS_PROMETHEUS"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "PR claim violations caught",
+      "description": "Numeric claims in agent-written prose that the record did not support, caught before publication. Non-zero means the audit earned its keep; a sustained rise means the delivery prompt is drifting.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 40
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "DS_PROMETHEUS"
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(etl_pr_claim_violations_total[$__range]))",
+          "legendFormat": "violations/s",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "DS_PROMETHEUS"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Agent latency (p95)",
+      "description": "Per-agent, including tool calls. The Spark Engineer's tail is gate revisions; everyone else's is the provider.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 40
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "DS_PROMETHEUS"
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, agent) (increase(etl_agent_duration_seconds_bucket[$__range])))",
+          "legendFormat": "{{agent}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "DS_PROMETHEUS"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+# Least privilege, and the honest answer is "almost none".
+#
+# The workers do not talk to the Kubernetes API at all: they poll Temporal,
+# execute code in a subprocess, and write to a volume. So the ServiceAccount
+# exists to *deny* rather than to grant — a pod with no serviceAccountName gets
+# `default`, which in many clusters has been granted more than it should, and
+# automountServiceAccountToken puts a credential in the filesystem of the very
+# container that runs untrusted generated code.
+#
+# That is the whole point of this file: no Role is bound to the execution
+# worker, and its token is never mounted.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: etl-agent-worker
+  namespace: etl-migration
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: etl-execution-worker
+  namespace: etl-migration
+# Emphatically false. This pod runs untrusted generated code; handing it a
+# projected API token would let that code talk to the cluster.
+automountServiceAccountToken: false
