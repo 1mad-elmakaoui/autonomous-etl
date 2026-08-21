@@ -236,7 +236,8 @@ stateDiagram-v2
     Repair --> Delivery: exhausted (draft PR)
     Delivery --> PullRequest: policy allows
     Delivery --> NoPullRequest: refused / claims unsupported
-    PullRequest --> HumanReview --> [*]
+    PullRequest --> HumanReview
+    HumanReview --> [*]
     NoPullRequest --> [*]
     Rejected --> [*]
     NeedsHuman --> [*]
